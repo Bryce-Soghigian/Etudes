@@ -1,5 +1,10 @@
 import { Scale, Note } from "tonal";
 
+/** Diatonic letter order: octave numbering bumps when the letter wraps past G. */
+const LETTER_INDEX: Record<string, number> = {
+  C: 0, D: 1, E: 2, F: 3, G: 4, A: 5, B: 6,
+};
+
 export type Hand = "right" | "left" | "both";
 export type OctaveCount = 1 | 2 | 3 | 4;
 
@@ -57,22 +62,28 @@ export type ScaleSequence = {
   octaves: OctaveCount;
 };
 
-/** Build the ascending-only voice for `octaves` octaves starting at startOctave. */
+/**
+ * Build the ascending-only voice for `octaves` octaves starting at startOctave.
+ * Octave numbering bumps on LETTER wrap (G → A → B → C bumps at C), which is
+ * the correct spelling rule and also handles enharmonic notes like Cb (which
+ * shares chroma with B but musically belongs in the next octave up).
+ */
 function buildAscending(pcs: string[], startOctave: number, octaves: number): string[] {
   const out: string[] = [];
-  let lastChroma = -1;
+  let lastLetter = -1;
   let oct = startOctave;
   for (let o = 0; o < octaves; o++) {
     for (const pc of pcs) {
-      const chroma = Note.chroma(pc);
-      if (chroma === undefined) continue;
-      if (chroma <= lastChroma) oct += 1;
+      const letter = LETTER_INDEX[pc[0]?.toUpperCase() ?? ""];
+      if (letter === undefined) continue;
+      if (letter <= lastLetter) oct += 1;
       out.push(`${pc}${oct}`);
-      lastChroma = chroma;
+      lastLetter = letter;
     }
   }
-  // Add the final tonic at the top
-  out.push(`${pcs[0]}${oct + 1}`);
+  // Top tonic sits exactly `octaves` above the starting tonic, regardless of
+  // where the inner loop happened to leave `oct`.
+  out.push(`${pcs[0]}${startOctave + octaves}`);
   return out;
 }
 
