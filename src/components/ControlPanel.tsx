@@ -1,4 +1,10 @@
-import { SCALE_FAMILIES, TONICS } from "../music/scales";
+import {
+  SCALE_FAMILIES,
+  TONICS,
+  OCTAVE_COUNTS,
+  type Hand,
+  type OctaveCount,
+} from "../music/scales";
 
 type Mode = "guided" | "playalong";
 
@@ -7,6 +13,10 @@ type Props = {
   onTonicChange: (t: string) => void;
   familyId: string;
   onFamilyChange: (id: string) => void;
+  hand: Hand;
+  onHandChange: (h: Hand) => void;
+  octaves: OctaveCount;
+  onOctavesChange: (n: OctaveCount) => void;
   mode: Mode;
   onModeChange: (m: Mode) => void;
   bpm: number;
@@ -16,11 +26,21 @@ type Props = {
   onReset: () => void;
 };
 
+const HAND_OPTIONS: { id: Hand; glyph: string; label: string; hint: string }[] = [
+  { id: "right", glyph: "R", label: "Right", hint: "treble · one octave" },
+  { id: "left", glyph: "L", label: "Left", hint: "bass · one octave" },
+  { id: "both", glyph: "R+L", label: "Both", hint: "parallel, octave apart" },
+];
+
 export function ControlPanel({
   tonic,
   onTonicChange,
   familyId,
   onFamilyChange,
+  hand,
+  onHandChange,
+  octaves,
+  onOctavesChange,
   mode,
   onModeChange,
   bpm,
@@ -63,7 +83,40 @@ export function ControlPanel({
       </div>
 
       <div className="panel-section">
-        <div className="panel-label">III.&nbsp;&nbsp;Practice</div>
+        <div className="panel-label">III.&nbsp;&nbsp;Hands</div>
+        <div className="hands-grid">
+          {HAND_OPTIONS.map((h) => (
+            <button
+              key={h.id}
+              className={`hand ${h.id === hand ? "hand--active" : ""}`}
+              onClick={() => onHandChange(h.id)}
+            >
+              <span className="hand-glyph">{h.glyph}</span>
+              <span className="hand-label">{h.label}</span>
+              <span className="hand-hint">{h.hint}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel-section">
+        <div className="panel-label">IV.&nbsp;&nbsp;Octaves</div>
+        <div className="octaves-grid">
+          {OCTAVE_COUNTS.map((n) => (
+            <button
+              key={n}
+              className={`octave ${n === octaves ? "octave--active" : ""}`}
+              onClick={() => onOctavesChange(n)}
+            >
+              <span className="octave-num">{n}</span>
+              <span className="octave-unit">{n === 1 ? "octave" : "octaves"}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel-section">
+        <div className="panel-label">V.&nbsp;&nbsp;Practice</div>
         <div className="mode-toggle">
           <button
             className={`mode ${mode === "guided" ? "mode--active" : ""}`}

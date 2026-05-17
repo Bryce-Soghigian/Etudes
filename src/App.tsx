@@ -6,27 +6,56 @@ import { ControlPanel } from "./components/ControlPanel";
 import { StatusBar } from "./components/StatusBar";
 import { useMidi } from "./hooks/useMidi";
 import { useMetronome } from "./hooks/useMetronome";
-import { buildScaleSequence, formatPitchClasses } from "./music/scales";
-import { sameChroma } from "./music/midi";
+import {
+  buildScaleSequence,
+  formatPitchClasses,
+  type Hand,
+  type OctaveCount,
+} from "./music/scales";
+import { sameChroma, handBucket } from "./music/midi";
 
 type Mode = "guided" | "playalong";
 
 const BPM_STEP_UP = 4;
 const ACCURACY_TO_LEVEL_UP = 0.92;
 
+/**
+ * Does a played note "cover" a target?
+ *   - single-hand modes: chroma match in any octave (forgiving)
+ *   - both-hand mode: chroma match AND on the correct side of middle C
+ */
+function matchesTarget(played: number, target: number, hand: Hand): boolean {
+  if (!sameChroma(played, target)) return false;
+  if (hand === "both") return handBucket(played) === handBucket(target);
+  return true;
+}
+
 export default function App() {
   const { status, heldNotes, connect, selectInput, subscribe } = useMidi();
 
   const [tonic, setTonic] = useState("C");
   const [familyId, setFamilyId] = useState("major");
+  const [hand, setHand] = useState<Hand>("right");
+  const [octaves, setOctaves] = useState<OctaveCount>(1);
   const [mode, setMode] = useState<Mode>("guided");
   const [bpm, setBpm] = useState(60);
   const [running, setRunning] = useState(false);
 
   const sequence = useMemo(
-    () => buildScaleSequence(tonic, familyId, 4),
-    [tonic, familyId],
+    () => buildScaleSequence(tonic, familyId, hand, octaves),
+    [tonic, familyId, hand, octaves],
   );
+
+  /** Auto-fit the piano range to the actual notes in the sequence (rounded to C boundaries). */
+  const pianoRange = useMemo(() => {
+    const all = sequence.steps.flatMap((s) => s.midi);
+    if (all.length === 0) return { low: 36, high: 84 };
+    const minN = Math.min(...all);
+    const maxN = Math.max(...all);
+    const low = Math.max(21, Math.floor((minN - 5) / 12) * 12);
+    const high = Math.min(108, Math.ceil((maxN + 5) / 12) * 12);
+    return { low, high };
+  }, [sequence.steps]);
 
   const scaleChromas = useMemo(() => {
     const set = new Set<number>();
@@ -37,100 +66,118 @@ export default function App() {
     return set;
   }, [sequence.pitchClasses]);
 
-  // ----- guided state -----
-  const [guidedIndex, setGuidedIndex] = useState(0);
+  // ----- shared state -----
+  const [stepIndex, setStepIndex] = useState(0);
+  const [stepMatched, setStepMatched] = useState<Set<number>>(new Set());
   const [correctFlash, setCorrectFlash] = useState<Set<number>>(new Set());
   const [wrongFlash, setWrongFlash] = useState<Set<number>>(new Set());
 
   // ----- play-along state -----
-  const [tickIndex, setTickIndex] = useState(-1);
-  const tickTargetRef = useRef<{ midi: number; at: number; idx: number } | null>(null);
+  const tickTargetRef = useRef<{
+    midis: number[];
+    matched: Set<number>;
+    at: number;
+    idx: number;
+  } | null>(null);
   const [scoring, setScoring] = useState({
     hits: 0,
     misses: 0,
-    timingMs: [] as number[],
     runs: 0,
     lastRunAccuracy: 0,
   });
 
   const reset = useCallback(() => {
-    setGuidedIndex(0);
-    setTickIndex(-1);
+    setStepIndex(0);
+    setStepMatched(new Set());
     tickTargetRef.current = null;
     setCorrectFlash(new Set());
     setWrongFlash(new Set());
-    setScoring({ hits: 0, misses: 0, timingMs: [], runs: 0, lastRunAccuracy: 0 });
+    setScoring({ hits: 0, misses: 0, runs: 0, lastRunAccuracy: 0 });
   }, []);
 
   useEffect(() => {
     reset();
-  }, [tonic, familyId, mode, reset]);
+  }, [tonic, familyId, hand, octaves, mode, reset]);
 
   // ---- guided mode listener ----
   useEffect(() => {
     if (mode !== "guided" || !running) return;
     return subscribe((e) => {
       if (e.type !== "noteOn") return;
-      const target = sequence.midi[guidedIndex];
-      if (target == null) return;
-      if (sameChroma(e.note, target)) {
+      const step = sequence.steps[stepIndex];
+      if (!step) return;
+
+      // Find an unmatched target this note covers
+      const matchedTarget = step.midi.find(
+        (t) => !stepMatched.has(t) && matchesTarget(e.note, t, hand),
+      );
+
+      if (matchedTarget !== undefined) {
         setCorrectFlash(new Set([e.note]));
         window.setTimeout(() => setCorrectFlash(new Set()), 220);
-        setGuidedIndex((i) => {
-          if (i + 1 >= sequence.midi.length) {
-            window.setTimeout(() => setGuidedIndex(0), 400);
+
+        const nextMatched = new Set(stepMatched);
+        nextMatched.add(matchedTarget);
+
+        if (nextMatched.size >= step.midi.length) {
+          setStepMatched(new Set());
+          setStepIndex((i) => {
+            if (i + 1 >= sequence.steps.length) {
+              window.setTimeout(() => setStepIndex(0), 400);
+            }
             return i + 1;
-          }
-          return i + 1;
-        });
+          });
+        } else {
+          setStepMatched(nextMatched);
+        }
       } else {
         setWrongFlash(new Set([e.note]));
         window.setTimeout(() => setWrongFlash(new Set()), 220);
       }
     });
-  }, [mode, running, sequence.midi, guidedIndex, subscribe]);
+  }, [mode, running, sequence.steps, stepIndex, stepMatched, hand, subscribe]);
 
-  // ---- play-along: each metronome tick advances the target ----
+  // ---- play-along: each metronome tick advances the target chord ----
   const handleTick = useCallback(
     (idx: number, when: number) => {
       if (mode !== "playalong") return;
-      // First two ticks are a count-in; then we start the scale
       const COUNT_IN = 4;
       if (idx < COUNT_IN) {
-        setTickIndex(idx - COUNT_IN);
+        setStepIndex(idx - COUNT_IN);
         return;
       }
       const seqIdx = idx - COUNT_IN;
-      if (seqIdx >= sequence.midi.length) {
-        const runHits = scoring.hits;
-        const runTotal = sequence.midi.length;
-        const accuracy = runTotal > 0 ? runHits / runTotal : 0;
+      if (seqIdx >= sequence.steps.length) {
+        const stepCount = sequence.steps.length;
+        const expected = stepCount * (sequence.steps[0]?.midi.length ?? 1);
+        const accuracy = expected > 0 ? scoring.hits / expected : 0;
         setScoring((s) => ({
           hits: 0,
           misses: 0,
-          timingMs: [],
           runs: s.runs + 1,
           lastRunAccuracy: accuracy,
         }));
         if (accuracy >= ACCURACY_TO_LEVEL_UP) {
           setBpm((b) => Math.min(200, b + BPM_STEP_UP));
         }
-        setTickIndex(0);
+        setStepIndex(0);
         tickTargetRef.current = {
-          midi: sequence.midi[0],
+          midis: sequence.steps[0].midi,
+          matched: new Set(),
           at: when * 1000,
           idx: 0,
         };
         return;
       }
-      setTickIndex(seqIdx);
+      setStepIndex(seqIdx);
       tickTargetRef.current = {
-        midi: sequence.midi[seqIdx],
+        midis: sequence.steps[seqIdx].midi,
+        matched: new Set(),
         at: when * 1000,
         idx: seqIdx,
       };
     },
-    [mode, sequence.midi, scoring.hits],
+    [mode, sequence.steps, scoring.hits],
   );
 
   const { currentBeat } = useMetronome({
@@ -140,7 +187,7 @@ export default function App() {
     beatsPerBar: 4,
   });
 
-  // ---- play-along listener: judge note vs current target ----
+  // ---- play-along listener: judge each played note vs current chord target ----
   useEffect(() => {
     if (mode !== "playalong" || !running) return;
     return subscribe((e) => {
@@ -151,37 +198,50 @@ export default function App() {
       const window_ = beatMs * 0.45;
       const delta = Math.abs(e.at - tgt.at);
       const inWindow = delta < window_;
-      if (inWindow && sameChroma(e.note, tgt.midi)) {
+      const matchedTarget = tgt.midis.find(
+        (m) => !tgt.matched.has(m) && matchesTarget(e.note, m, hand),
+      );
+      if (inWindow && matchedTarget !== undefined) {
+        tgt.matched.add(matchedTarget);
         setCorrectFlash(new Set([e.note]));
         window.setTimeout(() => setCorrectFlash(new Set()), 160);
-        setScoring((s) => ({ ...s, hits: s.hits + 1, timingMs: [...s.timingMs, e.at - tgt.at] }));
-        tickTargetRef.current = null; // each tick scored at most once
+        setScoring((s) => ({ ...s, hits: s.hits + 1 }));
       } else {
         setWrongFlash(new Set([e.note]));
         window.setTimeout(() => setWrongFlash(new Set()), 160);
         setScoring((s) => ({ ...s, misses: s.misses + 1 }));
       }
     });
-  }, [mode, running, bpm, subscribe]);
+  }, [mode, running, bpm, hand, subscribe]);
 
-  const guidedTarget = mode === "guided" && running
-    ? sequence.midi[Math.min(guidedIndex, sequence.midi.length - 1)]
-    : null;
+  const guidedTargets =
+    mode === "guided" && running
+      ? new Set(sequence.steps[Math.min(stepIndex, sequence.steps.length - 1)]?.midi ?? [])
+      : new Set<number>();
 
-  const playalongTarget = mode === "playalong" && running && tickIndex >= 0
-    ? sequence.midi[tickIndex]
-    : null;
+  const playalongTargets =
+    mode === "playalong" && running && stepIndex >= 0
+      ? new Set(sequence.steps[stepIndex]?.midi ?? [])
+      : new Set<number>();
 
-  const target = guidedTarget ?? playalongTarget;
+  const activeTargets =
+    guidedTargets.size > 0 ? guidedTargets : playalongTargets;
 
-  const activeStaffIndex = mode === "guided"
-    ? Math.min(guidedIndex, Math.ceil(sequence.midi.length / 2))
-    : Math.min(Math.max(tickIndex, 0), Math.ceil(sequence.midi.length / 2));
+  /**
+   * Map the (full) sequence stepIndex onto its position in the ascending-only
+   * staff array. Descending positions mirror back to their ascending twin so the
+   * same note lights up on the way down as on the way up.
+   */
+  const ascLen =
+    sequence.trebleAscending?.length ?? sequence.bassAscending?.length ?? 1;
+  const activeStaffIndex = (() => {
+    const i = Math.max(0, stepIndex);
+    if (i < ascLen) return i;
+    return Math.max(0, 2 * (ascLen - 1) - i);
+  })();
 
-  const accuracy =
-    scoring.hits + scoring.misses === 0
-      ? 0
-      : scoring.hits / (scoring.hits + scoring.misses);
+  const totalScored = scoring.hits + scoring.misses;
+  const accuracy = totalScored === 0 ? 0 : scoring.hits / totalScored;
 
   return (
     <div className="app">
@@ -206,6 +266,13 @@ export default function App() {
             <span className="formula-pcs">
               {formatPitchClasses(sequence.pitchClasses)}
             </span>
+            <span className="formula-hand">
+              {hand === "right" && "right hand"}
+              {hand === "left" && "left hand"}
+              {hand === "both" && "both hands · parallel"}
+              {" · "}
+              {octaves} {octaves === 1 ? "octave" : "octaves"}
+            </span>
           </div>
         </header>
 
@@ -214,20 +281,30 @@ export default function App() {
             <div className="card-header">
               <span className="card-roman">§ I</span>
               <span className="card-title">Notation</span>
-              <span className="card-meta">ascending, one octave</span>
+              <span className="card-meta">
+                {hand === "both" ? "grand staff" : "ascending, one octave"}
+              </span>
             </div>
-            <Staff notes={sequence.notes} activeIndex={running ? activeStaffIndex : null} />
+            <Staff
+              trebleNotes={sequence.trebleAscending}
+              bassNotes={sequence.bassAscending}
+              activeIndex={running ? activeStaffIndex : null}
+            />
           </div>
 
           <div className="piano-card">
             <div className="card-header">
               <span className="card-roman">§ II</span>
               <span className="card-title">Keyboard</span>
-              <span className="card-meta">C3 — C6</span>
+              <span className="card-meta">
+                {Note.fromMidi(pianoRange.low)} — {Note.fromMidi(pianoRange.high)}
+              </span>
             </div>
             <Piano
+              low={pianoRange.low}
+              high={pianoRange.high}
               held={heldNotes}
-              target={target}
+              targets={activeTargets}
               correct={correctFlash}
               wrong={wrongFlash}
               scaleChromas={scaleChromas}
@@ -237,8 +314,8 @@ export default function App() {
           <ReadoutsRail
             mode={mode}
             running={running}
-            guidedIndex={guidedIndex}
-            sequenceLength={sequence.midi.length}
+            stepIndex={stepIndex}
+            stepCount={sequence.steps.length}
             accuracy={accuracy}
             hits={scoring.hits}
             misses={scoring.misses}
@@ -255,6 +332,10 @@ export default function App() {
         onTonicChange={setTonic}
         familyId={familyId}
         onFamilyChange={setFamilyId}
+        hand={hand}
+        onHandChange={setHand}
+        octaves={octaves}
+        onOctavesChange={setOctaves}
         mode={mode}
         onModeChange={(m) => {
           setMode(m);
@@ -283,8 +364,8 @@ export default function App() {
 function ReadoutsRail({
   mode,
   running,
-  guidedIndex,
-  sequenceLength,
+  stepIndex,
+  stepCount,
   accuracy,
   hits,
   misses,
@@ -295,8 +376,8 @@ function ReadoutsRail({
 }: {
   mode: Mode;
   running: boolean;
-  guidedIndex: number;
-  sequenceLength: number;
+  stepIndex: number;
+  stepCount: number;
   accuracy: number;
   hits: number;
   misses: number;
@@ -322,8 +403,8 @@ function ReadoutsRail({
           <div className="readout">
             <div className="readout-label">Progress</div>
             <div className="readout-value">
-              {Math.min(guidedIndex, sequenceLength)}
-              <span className="readout-sub">/ {sequenceLength}</span>
+              {Math.min(stepIndex, stepCount)}
+              <span className="readout-sub">/ {stepCount}</span>
             </div>
           </div>
           <div className="readout">
@@ -332,7 +413,7 @@ function ReadoutsRail({
               <div
                 className="progress-fill"
                 style={{
-                  width: `${Math.min(100, (guidedIndex / Math.max(1, sequenceLength)) * 100)}%`,
+                  width: `${Math.min(100, (stepIndex / Math.max(1, stepCount)) * 100)}%`,
                 }}
               />
             </div>

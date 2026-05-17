@@ -7,8 +7,8 @@ type Props = {
   high?: number;
   /** notes the user is currently holding down */
   held: Set<number>;
-  /** the single "next" target note in guided mode */
-  target?: number | null;
+  /** exact MIDI targets to highlight (1 entry per active hand) */
+  targets?: Set<number>;
   /** notes flashed as correct (recently played and right) */
   correct?: Set<number>;
   /** notes flashed as wrong */
@@ -27,10 +27,10 @@ function isBlack(midi: number) {
 }
 
 export function Piano({
-  low = 48, // C3
+  low = 36, // C2
   high = 84, // C6
   held,
-  target,
+  targets,
   correct,
   wrong,
   scaleChromas,
@@ -45,7 +45,6 @@ export function Piano({
         x += WHITE_W;
       }
     }
-    // place black keys between whites
     for (let i = 0; i < whites.length - 1; i++) {
       const w = whites[i];
       const candidate = w.midi + 1;
@@ -64,7 +63,7 @@ export function Piano({
     correct ? Array.from(correct).some((c) => sameChroma(c, m)) : false;
   const isWrong = (m: number) =>
     wrong ? Array.from(wrong).some((w) => sameChroma(w, m)) : false;
-  const isTarget = (m: number) => target != null && sameChroma(target, m);
+  const isTarget = (m: number) => targets ? targets.has(m) : false;
   const inScale = (m: number) =>
     scaleChromas ? scaleChromas.has(((m % 12) + 12) % 12) : false;
 
@@ -77,7 +76,6 @@ export function Piano({
         role="img"
         aria-label="Piano keyboard"
       >
-        {/* shadow under the keybed */}
         <rect
           x="0"
           y={WHITE_H + 2}
@@ -86,7 +84,6 @@ export function Piano({
           fill="url(#bedShadow)"
         />
 
-        {/* white keys */}
         {whites.map(({ midi, x }) => {
           const target_ = isTarget(midi);
           const held_ = isHeld(midi);
@@ -136,7 +133,6 @@ export function Piano({
           );
         })}
 
-        {/* black keys */}
         {blacks.map(({ midi, x }) => {
           const target_ = isTarget(midi);
           const held_ = isHeld(midi);

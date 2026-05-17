@@ -319,6 +319,15 @@ input:focus-visible {
   color: var(--bone-0);
 }
 
+.formula-hand {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+
 /* --- hero region: staff + piano + readouts --- */
 
 .hero {
@@ -657,6 +666,95 @@ input:focus-visible {
   font-family: var(--serif);
   font-style: italic;
   font-size: 12px;
+  color: var(--bone-3);
+}
+
+/* hands selector */
+
+.hands-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+.hand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 12px 14px;
+  border: 1px solid var(--rule);
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+}
+.hand:hover { border-color: var(--rule-strong); }
+
+.hand--active {
+  background: var(--amber-soft);
+  border-color: var(--amber);
+}
+
+.hand-glyph {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--bone-3);
+}
+.hand--active .hand-glyph { color: var(--amber); }
+
+.hand-label {
+  font-family: var(--serif);
+  font-size: 17px;
+  color: var(--bone-0);
+  letter-spacing: 0.01em;
+}
+
+.hand-hint {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 11px;
+  color: var(--bone-3);
+  line-height: 1.2;
+}
+
+/* octaves selector */
+
+.octaves-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.octave {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 0 10px;
+  border: 1px solid var(--rule);
+  transition: background 0.12s, border-color 0.12s;
+}
+.octave:hover { border-color: var(--rule-strong); }
+
+.octave--active {
+  background: var(--amber-soft);
+  border-color: var(--amber);
+}
+
+.octave-num {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 24px;
+  color: var(--bone-0);
+  line-height: 1;
+}
+.octave--active .octave-num { color: var(--amber); }
+
+.octave-unit {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   color: var(--bone-3);
 }
 

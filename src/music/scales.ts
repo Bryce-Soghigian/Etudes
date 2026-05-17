@@ -1,5 +1,8 @@
 import { Scale, Note } from "tonal";
 
+export type Hand = "right" | "left" | "both";
+export type OctaveCount = 1 | 2 | 3 | 4;
+
 export type ScaleFamily = {
   id: string;
   label: string;
@@ -32,57 +35,107 @@ export const TONICS = [
 
 export type Tonic = (typeof TONICS)[number];
 
+export const OCTAVE_COUNTS: OctaveCount[] = [1, 2, 3, 4];
+
+export type ScaleStep = {
+  /** MIDI notes to play simultaneously at this step (1 entry per active hand) */
+  midi: number[];
+};
+
 export type ScaleSequence = {
   /** pitch-classes ascending, e.g. ["C","D","E","F","G","A","B"] */
   pitchClasses: string[];
-  /** full ascending+descending note list with octaves, e.g. ["C4","D4",...,"C5","B4",...,"C4"] */
-  notes: string[];
-  /** corresponding MIDI numbers */
-  midi: number[];
-  /** display key signature, e.g. "C Major" */
+  /** ordered steps; each step is a chord of notes to play together */
+  steps: ScaleStep[];
+  /** treble voice for the staff (ascending only), null when left-only */
+  trebleAscending: string[] | null;
+  /** bass voice for the staff (ascending only), null when right-only */
+  bassAscending: string[] | null;
+  /** display title e.g. "C Major" */
   title: string;
+  hand: Hand;
+  octaves: OctaveCount;
 };
 
+/** Build the ascending-only voice for `octaves` octaves starting at startOctave. */
+function buildAscending(pcs: string[], startOctave: number, octaves: number): string[] {
+  const out: string[] = [];
+  let lastChroma = -1;
+  let oct = startOctave;
+  for (let o = 0; o < octaves; o++) {
+    for (const pc of pcs) {
+      const chroma = Note.chroma(pc);
+      if (chroma === undefined) continue;
+      if (chroma <= lastChroma) oct += 1;
+      out.push(`${pc}${oct}`);
+      lastChroma = chroma;
+    }
+  }
+  // Add the final tonic at the top
+  out.push(`${pcs[0]}${oct + 1}`);
+  return out;
+}
+
+/** Combine ascending + descending (without repeating the top note). */
+function ascendingToFull(asc: string[]): string[] {
+  return [...asc, ...asc.slice(0, -1).reverse()];
+}
+
 /**
- * Build an ascending-then-descending one-octave sequence for the given scale,
- * starting at `startOctave` and returning to it.
+ * Build an N-octave ascending-then-descending sequence.
+ *   hand = right | left | both (parallel motion, one octave apart)
+ *   octaves = how many octaves to span before turning around
  */
 export function buildScaleSequence(
   tonic: string,
   familyId: string,
+  hand: Hand = "right",
+  octaves: OctaveCount = 1,
   startOctave = 4,
 ): ScaleSequence {
   const family = SCALE_FAMILIES.find((f) => f.id === familyId) ?? SCALE_FAMILIES[0];
   const sc = Scale.get(`${tonic} ${family.tonalName}`);
   const pcs = sc.notes.length ? sc.notes : Scale.get(`C ${family.tonalName}`).notes;
 
-  // Ascending with octaves
-  const ascending: string[] = [];
-  let lastChroma = -1;
-  let oct = startOctave;
-  for (const pc of pcs) {
-    const chroma = Note.chroma(pc);
-    if (chroma === undefined) continue;
-    if (chroma <= lastChroma) oct += 1;
-    ascending.push(`${pc}${oct}`);
-    lastChroma = chroma;
-  }
-  // Add octave tonic on top
-  ascending.push(`${pcs[0]}${oct + 1}`);
+  const rightAsc =
+    hand === "right" || hand === "both"
+      ? buildAscending(pcs, startOctave, octaves)
+      : null;
+  const leftAsc =
+    hand === "left" || hand === "both"
+      ? buildAscending(pcs, startOctave - 1, octaves)
+      : null;
 
-  const descending = [...ascending].slice(0, -1).reverse();
-  const notes = [...ascending, ...descending];
-  const midi = notes.map((n) => Note.midi(n) ?? 0);
+  const rightFull = rightAsc ? ascendingToFull(rightAsc) : null;
+  const leftFull = leftAsc ? ascendingToFull(leftAsc) : null;
+
+  const stepCount = (rightFull ?? leftFull ?? []).length;
+  const steps: ScaleStep[] = [];
+  for (let i = 0; i < stepCount; i++) {
+    const midis: number[] = [];
+    if (rightFull) {
+      const m = Note.midi(rightFull[i]);
+      if (m != null) midis.push(m);
+    }
+    if (leftFull) {
+      const m = Note.midi(leftFull[i]);
+      if (m != null) midis.push(m);
+    }
+    steps.push({ midi: midis });
+  }
 
   return {
     pitchClasses: pcs,
-    notes,
-    midi,
+    steps,
+    trebleAscending: rightAsc,
+    bassAscending: leftAsc,
     title: `${tonic} ${family.label}`,
+    hand,
+    octaves,
   };
 }
 
-/** Format pitch-classes into a comma-separated formula like "C  D  E  F  G  A  B" */
+/** Format pitch-classes into a spaced string like "C  D  E  F  G  A  B" */
 export function formatPitchClasses(pcs: string[]): string {
   return pcs.join("  ");
 }
